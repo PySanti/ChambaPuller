@@ -4,7 +4,7 @@ import os
 
 
 
-def gemini_query():
+def gemini_query(prompt):
     load_dotenv()
     key = os.getenv("GEMINI_API_KEY")
 
@@ -13,9 +13,8 @@ def gemini_query():
 
     response = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents="Explain how AI works in a few words",
+        contents=prompt,
     )
 
-    print(response.text)
-
+    return response.text
 

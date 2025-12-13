@@ -1,3 +1,5 @@
+from utils.gemini_query import gemini_query
+from utils.generate_prompt import generate_prompt
 from utils.get_last_offers import get_last_offers
 from utils.get_offer_description import get_offer_description
 from time import sleep
@@ -16,7 +18,9 @@ if __name__ == "__main__":
 
         # Se accede a linkedin, se extrae la description de la oferta y se setea
         offer.set_description()
-        print(offer.description)
+
+        print(gemini_query(generate_prompt(offer.description)))
         sleep(5)
+        exit(-1)
     
 
