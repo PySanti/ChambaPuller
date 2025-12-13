@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 # Requiere: pip install beautifulsoup4
 from bs4 import BeautifulSoup
 
+from utils.Offer import Offer
+
 
 # ----------------------------
 # Helpers
@@ -284,8 +286,13 @@ def get_last_offers(
                 "date": date_iso,
                 "links": links,
             })
-
-        return results
+        
+        offers = []
+        for mail in results:
+            for link in mail['links']:
+                new_offer = Offer(link, mail['date'])
+                offers.append(new_offer)
+        return offers
 
     finally:
         try:
@@ -298,11 +305,4 @@ def get_last_offers(
             pass
 
 
-if __name__ == "__main__":
-    offers = get_last_offers(limit=30, unseen_only=False)
-    for item in offers:
-        if item["links"]:
-            print(item["date"], "-", item["subject"])
-            for link in item["links"]:
-                print("  ", link)
-            print()
+
