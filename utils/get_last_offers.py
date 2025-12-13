@@ -290,7 +290,7 @@ def get_last_offers(
         offers = []
         for mail in results:
             for link in mail['links']:
-                new_offer = Offer(link, mail['date'])
+                new_offer = Offer(link, mail['date'], mail['subject'])
                 offers.append(new_offer)
         return offers
 
