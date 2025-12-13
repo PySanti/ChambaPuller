@@ -14,11 +14,12 @@ class Offer:
             __________________________________________
             |   Offer Data:
             |---------------
-            |   Link : {self.link}
-            |   Subject : {self.father_mail_subject}
-            |   Reception_date: {self.reception_date}
-            |   Affinity :  {self.affinity}
-            |   Description : {self.description}
+            |   Offer id        : {self.id}
+            |   Link            : {self.link}
+            |   Mail Subject    : {self.father_mail_subject}
+            |   Reception_date  : {self.reception_date}
+            |   Affinity        : {self.affinity}
+            |   Description     : {self.description[:5]+'...' if self.description else self.description}
             __________________________________________
         """
     def set_description(self):
