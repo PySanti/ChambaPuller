@@ -1,4 +1,7 @@
-from utils.gemini_query import gemini_query
+from utils.get_last_offers import get_last_offers
 
-
-gemini_query()
+for a in get_last_offers(limit=3):
+    print(a['subject'])
+    for l in a['links']:
+        print(l)
+    print("________________")
