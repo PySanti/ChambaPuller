@@ -30,10 +30,12 @@ Este proyecto implementará un pipeline para:
 
 A continuación se listan los obstáculos con los que me podré enfrentar
 
-* La cantidad de correos a traer desde gmail
+* La cantidad de correos a traer desde gmail: utilizando IMAP server + app aplications de GMAIL, lo mas probable es que no tengamos problemas de restricciones en nuestro caso de uso.
 
 * La cantidad de peticiones por minuto que se le pueden hacer a linkedin.
 
 * La cantidad de solicitudes por minuto que se le pueden hacer a gemini
+
+* La cantidad de solicitudes por dia que se le pueden hacer a gemini.
 
 * La posibilidad de subir un archivo a gemini (el CV)
