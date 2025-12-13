@@ -1,3 +1,4 @@
+
 import os
 import re
 import ssl
@@ -6,15 +7,22 @@ import email
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse, parse_qs, unquote
-from html import unescape
 from dotenv import load_dotenv
+
+# Requiere: pip install beautifulsoup4
+from bs4 import BeautifulSoup
+
+
+# ----------------------------
+# Helpers
+# ----------------------------
 
 def _decode_mime_header(value: str) -> str:
     """Decode RFC2047 headers safely (Subject, etc.)."""
     if not value:
         return ""
     parts = decode_header(value)
-    out = []
+    out: list[str] = []
     for part, enc in parts:
         if isinstance(part, bytes):
             out.append(part.decode(enc or "utf-8", errors="replace"))
@@ -22,13 +30,14 @@ def _decode_mime_header(value: str) -> str:
             out.append(part)
     return "".join(out)
 
-def _extract_body(msg ) -> tuple[str, str]:
+
+def _extract_body(msg) -> tuple[str, str]:
     """
     Returns (text, html) best-effort from an email message.
     Prefers the largest html part if present.
     """
-    text_parts = []
-    html_parts = []
+    text_parts: list[str] = []
+    html_parts: list[str] = []
 
     if msg.is_multipart():
         for part in msg.walk():
@@ -36,10 +45,12 @@ def _extract_body(msg ) -> tuple[str, str]:
             disp = (part.get("Content-Disposition") or "").lower()
             if "attachment" in disp:
                 continue
+
             try:
                 payload = part.get_payload(decode=True)
             except Exception:
                 payload = None
+
             if not payload:
                 continue
 
@@ -60,50 +71,48 @@ def _extract_body(msg ) -> tuple[str, str]:
         else:
             text_parts.append(content)
 
-    # Pick "best" parts
     text = "\n\n".join(text_parts).strip()
     html = max(html_parts, key=len).strip() if html_parts else ""
     return text, html
 
+
 _URL_RE = re.compile(r"""https?://[^\s"'<>]+""", re.IGNORECASE)
 
-def _extract_urls_from_html(html: str) -> list[str]:
-    """
-    Extract URLs from HTML using:
-    - href="..."
-    - fallback: raw url regex
-    """
-    urls = []
-    if html:
-        # href extraction
-        hrefs = re.findall(r"""href\s*=\s*["']([^"']+)["']""", html, flags=re.IGNORECASE)
-        for h in hrefs:
-            if h.startswith("http://") or h.startswith("https://"):
-                urls.append(h)
-
-        # fallback raw
-        urls.extend(_URL_RE.findall(html))
-
-    # de-dupe preserving order
-    seen = set()
-    out = []
-    for u in urls:
-        u = unescape(u).strip()
-        if u and u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
 
 def _extract_urls_from_text(text: str) -> list[str]:
+    """Extract raw URLs from plain text."""
     urls = _URL_RE.findall(text or "")
-    seen = set()
-    out = []
+    seen, out = set(), []
     for u in urls:
         u = u.strip()
         if u and u not in seen:
             seen.add(u)
             out.append(u)
     return out
+
+
+def _extract_urls_from_html(html: str) -> list[str]:
+    """
+    HTML: SOLO extrae links desde <a href="...">.
+    (No hacemos regex global dentro del HTML para evitar links "basura" de tracking/recursos/pixels)
+    """
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    urls: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if href.startswith("http://") or href.startswith("https://"):
+            urls.append(href)
+
+    seen, out = set(), []
+    for u in urls:
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
 
 def _unwrap_tracking(url: str) -> str:
     """
@@ -118,39 +127,59 @@ def _unwrap_tracking(url: str) -> str:
         qs = parse_qs(parsed.query)
         for key in ("url", "redirect", "u", "target", "dest", "destination"):
             if key in qs and qs[key]:
-                candidate = qs[key][0]
-                candidate = unquote(candidate)
+                candidate = unquote(qs[key][0])
                 if candidate.startswith("http://") or candidate.startswith("https://"):
                     return candidate
     except Exception:
         pass
     return url
 
-def _is_direct_linkedin_job(url: str) -> bool:
+
+def _canonical_linkedin_job_url(url: str) -> str | None:
     """
-    "Direct to LinkedIn" job link heuristic.
-    Accepts:
-    - linkedin.com/jobs/view/...
-    - linkedin.com/jobs/search/...
-    - linkedin.com/jobs/collections/...
-    - lnkd.in short links can be allowed if you want, but those are not "direct".
-      (We exclude lnkd.in by default.)
+    Devuelve una URL canónica del empleo si se puede inferir el Job ID,
+    o None si no parece link directo de empleo.
     """
     try:
-        p = urlparse(url)
+        u = _unwrap_tracking(url)
+        p = urlparse(u)
         host = (p.netloc or "").lower()
 
-        # Exclude shortener if you want strictly direct
+        # "directo": linkedin.com (excluye lnkd.in)
         if host.endswith("lnkd.in"):
-            return False
-
+            return None
         if "linkedin.com" not in host:
-            return False
+            return None
 
-        path = (p.path or "").lower()
-        return path.startswith("/jobs/") or "/jobs/" in path
+        path = p.path or ""
+        q = parse_qs(p.query)
+
+        # Caso 1: /jobs/view/<id>
+        m = re.search(r"/jobs/view/(\d+)", path)
+        if m:
+            job_id = m.group(1)
+            return f"https://www.linkedin.com/jobs/view/{job_id}/"
+
+        # Caso 2: parámetros frecuentes
+        for key in ("currentJobId", "jobId"):
+            if key in q and q[key]:
+                job_id = q[key][0]
+                if job_id.isdigit():
+                    return f"https://www.linkedin.com/jobs/view/{job_id}/"
+
+        return None
     except Exception:
-        return False
+        return None
+
+
+def _dedupe_keep_order(items: list[str]) -> list[str]:
+    seen, out = set(), []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
 
 # ----------------------------
 # Main function
@@ -163,13 +192,13 @@ def get_last_offers(
 ) -> list[dict]:
     """
     Reads LinkedIn Job Alerts emails (From: jobalerts-noreply@linkedin.com),
-    extracts direct LinkedIn job links from each email.
+    extracts *job* links (deduped by Job ID) from each email.
 
     Requires .env with:
-      IMAP_HOST=...
-      IMAP_PORT=993   (optional, default 993)
-      IMAP_USER=...
-      IMAP_PASSWORD=...   (or IMAP_PASS)
+      IMAP_SERVER=...
+      IMAP_PORT=993 (optional)
+      GMAIL_USER=...
+      GMAIL_APP_PASSWORD=...
 
     Returns:
       [
@@ -190,7 +219,9 @@ def get_last_offers(
     password = os.getenv("GMAIL_APP_PASSWORD")
 
     if not host or not user or not password:
-        raise RuntimeError("Faltan credenciales IMAP en .env: IMAP_HOST, IMAP_USER, IMAP_PASSWORD (o IMAP_PASS).")
+        raise RuntimeError(
+            "Faltan credenciales IMAP en .env: IMAP_SERVER, GMAIL_USER, GMAIL_APP_PASSWORD."
+        )
 
     context = ssl.create_default_context()
     mail = imaplib.IMAP4_SSL(host, port, ssl_context=context)
@@ -199,9 +230,6 @@ def get_last_offers(
         mail.login(user, password)
         mail.select(mailbox)
 
-        # IMAP search: from LinkedIn alerts.
-        # NOTE: IMAP 'FROM' matches header substring (not strict equality).
-        # We add UNSEEN optionally.
         criteria = ['FROM', '"jobalerts-noreply@linkedin.com"']
         if unseen_only:
             criteria = ["UNSEEN"] + criteria
@@ -211,10 +239,9 @@ def get_last_offers(
             raise RuntimeError(f"IMAP search failed: {status} {data}")
 
         ids = data[0].split()
-        # Process newest first
-        ids = list(reversed(ids))[: max(0, limit)]
+        ids = list(reversed(ids))[: max(0, limit)]  # newest first
 
-        results = []
+        results: list[dict] = []
         for msg_id in ids:
             status, msg_data = mail.fetch(msg_id, "(RFC822)")
             if status != "OK" or not msg_data or not msg_data[0]:
@@ -224,8 +251,9 @@ def get_last_offers(
             msg = email.message_from_bytes(raw)
 
             subject = _decode_mime_header(msg.get("Subject", ""))
-            print(f"Procesando : {subject}")
-            message_id = msg.get("Message-ID", "").strip()
+            print(f"Procesando: {subject}")
+
+            message_id = (msg.get("Message-ID", "") or "").strip()
 
             date_raw = msg.get("Date", "")
             try:
@@ -235,24 +263,20 @@ def get_last_offers(
                 date_iso = ""
 
             text, html = _extract_body(msg)
-            urls = []
+
+            # URLs: HTML solo <a href>, texto con regex
+            urls: list[str] = []
             urls.extend(_extract_urls_from_html(html))
             urls.extend(_extract_urls_from_text(text))
 
-            # Unwrap tracking & filter for direct LinkedIn job urls
-            cleaned = []
+            # Canonicaliza y filtra SOLO empleos, deduplicando por Job ID
+            job_links: list[str] = []
             for u in urls:
-                u2 = _unwrap_tracking(u)
-                if _is_direct_linkedin_job(u2):
-                    cleaned.append(u2)
+                canon = _canonical_linkedin_job_url(u)
+                if canon:
+                    job_links.append(canon)
 
-            # de-dupe links per email
-            seen = set()
-            links = []
-            for u in cleaned:
-                if u not in seen:
-                    seen.add(u)
-                    links.append(u)
+            links = _dedupe_keep_order(job_links)
 
             results.append({
                 "message_id": message_id,
@@ -273,3 +297,12 @@ def get_last_offers(
         except Exception:
             pass
 
+
+if __name__ == "__main__":
+    offers = get_last_offers(limit=30, unseen_only=False)
+    for item in offers:
+        if item["links"]:
+            print(item["date"], "-", item["subject"])
+            for link in item["links"]:
+                print("  ", link)
+            print()
