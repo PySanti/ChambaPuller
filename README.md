@@ -38,4 +38,6 @@ A continuación se listan los obstáculos con los que me podré enfrentar
 
 * La cantidad de solicitudes por dia que se le pueden hacer a gemini.
 
+* La posibilidad de subir archivos a gemini desde la API.
+
 * La posibilidad de subir un archivo a gemini (el CV)
