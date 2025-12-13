@@ -1,6 +1,8 @@
 from utils.get_offer_description import get_offer_description
+import uuid
 class Offer:
     def __init__(self, link, reception_date, father_mail_subject) -> None:
+        self.id = uuid.uuid4()
         self.link = link
         self.reception_date = reception_date
         self.father_mail_subject = father_mail_subject
