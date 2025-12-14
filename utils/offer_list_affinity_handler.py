@@ -45,14 +45,23 @@ def offer_list_affinity_handler(offers_list, batch_size=OFFER_BATCH_SIZE):
     i = 0
     offer_batch = None
     non_set_affinity_offer_list = [o for o in offers_list if not o.affinity]
-    while i != -1:
-        if (len(non_set_affinity_offer_list)-i) < batch_size:
-            offer_batch = non_set_affinity_offer_list[i:]
-            i = -1
-        else:
-            offer_batch = non_set_affinity_offer_list[i:i+batch_size]
-            i+=batch_size
-        print(f"Enviando {len(offer_batch)} ofertas a gemini para encontrar su afinidad")
-        gemini_response = _get_offer_batch_affinity(offer_batch)
-        _set_offer_batch_affinity_by_gemini_response(gemini_response, offer_batch)
+    if len(non_set_affinity_offer_list) > 0:
+        while i != -1:
+            if (len(non_set_affinity_offer_list)-i) < batch_size:
+                offer_batch = non_set_affinity_offer_list[i:]
+                i = -1
+            else:
+                offer_batch = non_set_affinity_offer_list[i:i+batch_size]
+                i+=batch_size
+            print(f"Enviando {len(offer_batch)} ofertas a gemini para encontrar su afinidad")
+            try:
+                gemini_response = _get_offer_batch_affinity(offer_batch)
+                print(f"Respuesta de gemini: {gemini_response}")
+                _set_offer_batch_affinity_by_gemini_response(gemini_response, offer_batch)
+            except Exception as e:
+                print("Error en el consumo de gemini, saliendo del bucle")
+                print(e)
+                break
+    else:
+        print("Todas las ofertas dispuestas cuentan ya con afinidad !")
 

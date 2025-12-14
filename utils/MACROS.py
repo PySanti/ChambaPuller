@@ -59,7 +59,7 @@ id_calificacion;id_calificacion;id_calificacion;...
 
 """
 
-OFFER_BATCH_SIZE = 10
+OFFER_BATCH_SIZE = 20
 
 OFFER_COLUMNS = [
     "id",

@@ -8,6 +8,7 @@ from utils.load_offers_from_excel import load_offers_from_excel
 from utils.offer_filter_handler import offer_filter_handler
 from utils.remove_duplicated_offers import remove_duplicated_offers
 from utils.write_offers_to_excel import write_offers_to_excel
+from utils.offer_list_affinity_handler import offer_list_affinity_handler
 
 
 # PIPELINE PRINCIPAL
@@ -19,7 +20,7 @@ if __name__ == "__main__":
     print(f"Se cargaron {len(old_offers)} ofertas viejas")
 
     # Se cargan todas las ofertas de los ultimos N correos relacionados con ofertas de trabajo
-    N = 5
+    N = 100
     print(f"Cargando ofertas de los ultimos {N} correos")
     offers_list : List[Offer] = get_last_offers(limit=N) 
     print(f"Ofertas nuevas detectadas : {len(offers_list)}")
@@ -41,14 +42,16 @@ if __name__ == "__main__":
             except:
                 print(f"ERROR al tratar de ajustar la descripcion de : {offer.link}")
             sleep(5)
+        else:
+            print(f"Saltando oferta {offer.link} por que ya cuenta con descripcion")
 
     # Se eliminan las ofertas cuya descripcion no pudo ser encontrada
     cleaned_total_offers = offer_filter_handler(cleaned_total_offers)
 
     # Luego de cargar todas las descripciones de todas las ofertas, enviamos prompts a gemini en batches de 10 en 10
 
-    # print("Empezando a generar afinidad para cada oferta")
-    #    offer_list_affinity_handler(cleaned_total_offers)
+    print("Empezando a generar afinidad para cada oferta")
+    offer_list_affinity_handler(cleaned_total_offers)
    
     print(f"Guardando {len(cleaned_total_offers)} en el excel")
     write_offers_to_excel(cleaned_total_offers, CLEANED_OFFERS_PATH)
