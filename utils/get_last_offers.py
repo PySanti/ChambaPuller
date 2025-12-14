@@ -191,7 +191,7 @@ def get_last_offers(
     mailbox: str = "INBOX",
     limit: int = 50,
     unseen_only: bool = False,
-) -> list[dict]:
+) -> list[Offer]:
     """
     Reads LinkedIn Job Alerts emails (From: jobalerts-noreply@linkedin.com),
     extracts *job* links (deduped by Job ID) from each email.

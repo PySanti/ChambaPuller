@@ -1,23 +1,22 @@
-from utils.MACROS import OFFER_BATCH_SIZE
 from utils.get_last_offers import get_last_offers
 from time import sleep
-
-from utils.get_offers_affinity import get_offers_affinity
-from utils.load_offers_batches import load_offers_batches
+from typing import List
+from utils.Offer import Offer
+from utils.writing_handler import writing_handler
 
 
 # PIPELINE PRINCIPAL
 
 if __name__ == "__main__":
     # Se cargan todas las ofertas de los ultimos N correos relacionados con ofertas de trabajo
-    N = 5
+    N = 3
     print(f"Cargando ofertas de los ultimos {N} correos")
-    last_offers = get_last_offers(limit=N)
+    offers_list : List[Offer] = get_last_offers(limit=N) 
 
-    print(f"Ofertas detectadas : {len(last_offers)}")
+    print(f"Ofertas detectadas : {len(offers_list)}")
 
-    # De recorren todas las ofertas y para cada una
-    for offer in last_offers:
+    # Se recorren todas las ofertas y para cada una
+    for offer in offers_list:
         try:
             # Se accede a linkedin, se extrae la description de la oferta y se setea
             offer.set_description()
@@ -27,7 +26,8 @@ if __name__ == "__main__":
         sleep(5)
     print("Empezando a generar afinidad para cada oferta")
     # Luego de cargar todas las descripciones de todas las ofertas, enviamos prompts a gemini en batches de 10 en 10
-    load_offers_batches(last_offers)
+    #    offer_list_affinity_handler(offers_list)
+    
+    writing_handler(offers_list)
 
-    for o in last_offers:
-        print(o)
+    print("Fin del pipeline ...")

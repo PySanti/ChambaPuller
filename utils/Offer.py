@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from utils.get_offer_description import get_offer_description
 import uuid
+
 class Offer:
     def __init__(self, link, reception_date, father_mail_subject) -> None:
         self.id = uuid.uuid4()
@@ -24,3 +27,6 @@ class Offer:
         """
     def set_description(self):
         self.description = get_offer_description(self.link)
+
+
+

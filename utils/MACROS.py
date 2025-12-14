@@ -60,3 +60,17 @@ uuid_calificacion;uuid_calificacion;uuid_calificacion;...
 """
 
 OFFER_BATCH_SIZE = 10
+
+OFFER_COLUMNS = [
+    "id",
+    "link",
+    "reception_date",
+    "father_mail_subject",
+    "affinity",
+    "description",
+]
+
+REQUIRED_COLUMNS = ["link", "reception_date", "father_mail_subject"]
+
+CLEANED_OFFERS_PATH = "./data/cleaned_offers.xlsx"
+
