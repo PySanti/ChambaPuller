@@ -10,7 +10,7 @@ from utils.load_offers_batches import load_offers_batches
 
 if __name__ == "__main__":
     # Se cargan todas las ofertas de los ultimos N correos relacionados con ofertas de trabajo
-    N = 10
+    N = 5
     print(f"Cargando ofertas de los ultimos {N} correos")
     last_offers = get_last_offers(limit=N)
 
@@ -18,15 +18,14 @@ if __name__ == "__main__":
 
     # De recorren todas las ofertas y para cada una
     for offer in last_offers:
-        print(f"Accediento a Linkedin para buscar descripcion de oferta : {offer.link}")
-
-        # Se accede a linkedin, se extrae la description de la oferta y se setea
-        offer.set_description()
+        try:
+            # Se accede a linkedin, se extrae la description de la oferta y se setea
+            offer.set_description()
+            print(f"Se ajusto la descripcion de la oferta : {offer.link}")
+        except:
+            print(f"ERROR al tratar de ajustar la descripcion de : {offer.link}")
         sleep(5)
-    print("Descripciones encontradas para todas las ofertas")
-
     print("Empezando a generar afinidad para cada oferta")
-
     # Luego de cargar todas las descripciones de todas las ofertas, enviamos prompts a gemini en batches de 10 en 10
     load_offers_batches(last_offers)
 
