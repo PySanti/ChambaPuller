@@ -1,0 +1,802 @@
+from google.genai.types import CompletionStatsOrDict
+from utils.MACROS import CLEANED_OFFERS_PATH
+from utils.get_last_offers import get_last_offers
+from time import sleep
+from typing import List
+from utils.Offer import Offer
+from utils.load_offers_from_excel import load_offers_from_excel
+from utils.offer_filter_handler import offer_filter_handler
+from utils.remove_duplicated_offers import remove_duplicated_offers
+from utils.write_offers_to_excel import write_offers_to_excel
+
+
+# PIPELINE PRINCIPAL
+
+if __name__ == "__main__":
+    # Se cargan las ofertas contenidas en el excel
+    print("Cargando ofertas antiguas")
+    old_offers = load_offers_from_excel(CLEANED_OFFERS_PATH)
+    print(f"Se cargaron {len(old_offers)} ofertas viejas")
+
+    # Se cargan todas las ofertas de los ultimos N correos relacionados con ofertas de trabajo
+    N = 5
+    print(f"Cargando ofertas de los ultimos {N} correos")
+    offers_list : List[Offer] = get_last_offers(limit=N) 
+    print(f"Ofertas nuevas detectadas : {len(offers_list)}")
+
+    print("Fusionando ofertas")
+    total_offers = old_offers + offers_list
+    print("Limpiando duplicados entre ofertas viejas y nuevas")
+    cleaned_total_offers = remove_duplicated_offers(total_offers)
+    print(f"Se encontraron {len(total_offers)-len(cleaned_total_offers)} duplicados")
+
+
+    # Se recorren todas las ofertas y para cada una
+    for offer in cleaned_total_offers:
+        if not offer.description:
+            try:
+                # Se accede a linkedin, se extrae la description de la oferta y se setea
+                offer.set_description()
+                print(f"Se ajusto la descripcion de la oferta : {offer.link}")
+            except:
+                print(f"ERROR al tratar de ajustar la descripcion de : {offer.link}")
+            sleep(5)
+
+    # Se eliminan las ofertas cuya descripcion no pudo ser encontrada
+    cleaned_total_offers = offer_filter_handler(cleaned_total_offers)
+
+    # Luego de cargar todas las descripciones de todas las ofertas, enviamos prompts a gemini en batches de 10 en 10
+
+    # print("Empezando a generar afinidad para cada oferta")
+    #    offer_list_affinity_handler(cleaned_total_offers)
+   
+    print(f"Guardando {len(cleaned_total_offers)} en el excel")
+    write_offers_to_excel(cleaned_total_offers, CLEANED_OFFERS_PATH)
+
+    print("Fin del pipeline ...")
+from dotenv import load_dotenv
+from google import genai
+import os
+
+
+
+def gemini_query(prompt): 
+    load_dotenv()
+    key = os.getenv("GEMINI_API_KEY")
+    client = genai.Client(api_key=key)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
+    return response.text
+
+from utils.MACROS import BASE_PROMPT
+
+def generate_prompt(offers):
+    descrptions_section = "\n".join([f"\n\n###OFFER_ID  : {o.id}\n\nDESCRIPTION: {o.description}" for o in offers])
+    return BASE_PROMPT+descrptions_section
+
+import os
+import re
+import ssl
+import imaplib
+import email
+from email.header import decode_header
+from email.utils import parsedate_to_datetime
+from urllib.parse import urlparse, parse_qs, unquote
+from dotenv import load_dotenv
+
+# Requiere: pip install beautifulsoup4
+from bs4 import BeautifulSoup
+
+from utils.Offer import Offer
+
+
+# ----------------------------
+# Helpers
+# ----------------------------
+
+def _decode_mime_header(value: str) -> str:
+    """Decode RFC2047 headers safely (Subject, etc.)."""
+    if not value:
+        return ""
+    parts = decode_header(value)
+    out: list[str] = []
+    for part, enc in parts:
+        if isinstance(part, bytes):
+            out.append(part.decode(enc or "utf-8", errors="replace"))
+        else:
+            out.append(part)
+    return "".join(out)
+
+
+def _extract_body(msg) -> tuple[str, str]:
+    """
+    Returns (text, html) best-effort from an email message.
+    Prefers the largest html part if present.
+    """
+    text_parts: list[str] = []
+    html_parts: list[str] = []
+
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = (part.get_content_type() or "").lower()
+            disp = (part.get("Content-Disposition") or "").lower()
+            if "attachment" in disp:
+                continue
+
+            try:
+                payload = part.get_payload(decode=True)
+            except Exception:
+                payload = None
+
+            if not payload:
+                continue
+
+            charset = part.get_content_charset() or "utf-8"
+            content = payload.decode(charset, errors="replace")
+
+            if ctype == "text/plain":
+                text_parts.append(content)
+            elif ctype == "text/html":
+                html_parts.append(content)
+    else:
+        ctype = (msg.get_content_type() or "").lower()
+        payload = msg.get_payload(decode=True) or b""
+        charset = msg.get_content_charset() or "utf-8"
+        content = payload.decode(charset, errors="replace")
+        if ctype == "text/html":
+            html_parts.append(content)
+        else:
+            text_parts.append(content)
+
+    text = "\n\n".join(text_parts).strip()
+    html = max(html_parts, key=len).strip() if html_parts else ""
+    return text, html
+
+
+_URL_RE = re.compile(r"""https?://[^\s"'<>]+""", re.IGNORECASE)
+
+
+def _extract_urls_from_text(text: str) -> list[str]:
+    """Extract raw URLs from plain text."""
+    urls = _URL_RE.findall(text or "")
+    seen, out = set(), []
+    for u in urls:
+        u = u.strip()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def _extract_urls_from_html(html: str) -> list[str]:
+    """
+    HTML: SOLO extrae links desde <a href="...">.
+    (No hacemos regex global dentro del HTML para evitar links "basura" de tracking/recursos/pixels)
+    """
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    urls: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if href.startswith("http://") or href.startswith("https://"):
+            urls.append(href)
+
+    seen, out = set(), []
+    for u in urls:
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def _unwrap_tracking(url: str) -> str:
+    """
+    Attempts to unwrap common tracking wrappers:
+    - ...?url=<ENCODED>
+    - ...?redirect=<ENCODED>
+    - ...?u=<ENCODED>
+    - ...?target=<ENCODED>
+    """
+    try:
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        for key in ("url", "redirect", "u", "target", "dest", "destination"):
+            if key in qs and qs[key]:
+                candidate = unquote(qs[key][0])
+                if candidate.startswith("http://") or candidate.startswith("https://"):
+                    return candidate
+    except Exception:
+        pass
+    return url
+
+
+def _canonical_linkedin_job_url(url: str) -> str | None:
+    """
+    Devuelve una URL canónica del empleo si se puede inferir el Job ID,
+    o None si no parece link directo de empleo.
+    """
+    try:
+        u = _unwrap_tracking(url)
+        p = urlparse(u)
+        host = (p.netloc or "").lower()
+
+        # "directo": linkedin.com (excluye lnkd.in)
+        if host.endswith("lnkd.in"):
+            return None
+        if "linkedin.com" not in host:
+            return None
+
+        path = p.path or ""
+        q = parse_qs(p.query)
+
+        # Caso 1: /jobs/view/<id>
+        m = re.search(r"/jobs/view/(\d+)", path)
+        if m:
+            job_id = m.group(1)
+            return f"https://www.linkedin.com/jobs/view/{job_id}/"
+
+        # Caso 2: parámetros frecuentes
+        for key in ("currentJobId", "jobId"):
+            if key in q and q[key]:
+                job_id = q[key][0]
+                if job_id.isdigit():
+                    return f"https://www.linkedin.com/jobs/view/{job_id}/"
+
+        return None
+    except Exception:
+        return None
+
+
+def _dedupe_keep_order(items: list[str]) -> list[str]:
+    seen, out = set(), []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+# ----------------------------
+# Main function
+# ----------------------------
+
+def get_last_offers(
+    mailbox: str = "INBOX",
+    limit: int = 50,
+    unseen_only: bool = False,
+) -> list[Offer]:
+    """
+    Reads LinkedIn Job Alerts emails (From: jobalerts-noreply@linkedin.com),
+    extracts *job* links (deduped by Job ID) from each email.
+
+    Requires .env with:
+      IMAP_SERVER=...
+      IMAP_PORT=993 (optional)
+      GMAIL_USER=...
+      GMAIL_APP_PASSWORD=...
+
+    Returns:
+      [
+        {
+          "message_id": "...",
+          "subject": "...",
+          "date": "2025-12-13T08:00:00+01:00",
+          "links": ["https://www.linkedin.com/jobs/view/....", ...]
+        },
+        ...
+      ]
+    """
+    load_dotenv()
+
+    host = os.getenv("IMAP_SERVER")
+    port = int(os.getenv("IMAP_PORT", "993"))
+    user = os.getenv("GMAIL_USER")
+    password = os.getenv("GMAIL_APP_PASSWORD")
+
+    if not host or not user or not password:
+        raise RuntimeError(
+            "Faltan credenciales IMAP en .env: IMAP_SERVER, GMAIL_USER, GMAIL_APP_PASSWORD."
+        )
+
+    context = ssl.create_default_context()
+    mail = imaplib.IMAP4_SSL(host, port, ssl_context=context)
+
+    try:
+        mail.login(user, password)
+        mail.select(mailbox)
+
+        criteria = ['FROM', '"jobalerts-noreply@linkedin.com"']
+        if unseen_only:
+            criteria = ["UNSEEN"] + criteria
+
+        status, data = mail.search(None, *criteria)
+        if status != "OK":
+            raise RuntimeError(f"IMAP search failed: {status} {data}")
+
+        ids = data[0].split()
+        ids = list(reversed(ids))[: max(0, limit)]  # newest first
+
+        results: list[dict] = []
+        for msg_id in ids:
+            status, msg_data = mail.fetch(msg_id, "(RFC822)")
+            if status != "OK" or not msg_data or not msg_data[0]:
+                continue
+
+            raw = msg_data[0][1]
+            msg = email.message_from_bytes(raw)
+
+            subject = _decode_mime_header(msg.get("Subject", ""))
+            print(f"Procesando: {subject}")
+
+            message_id = (msg.get("Message-ID", "") or "").strip()
+
+            date_raw = msg.get("Date", "")
+            try:
+                dt = parsedate_to_datetime(date_raw) if date_raw else None
+                date_iso = dt.isoformat() if dt else ""
+            except Exception:
+                date_iso = ""
+
+            text, html = _extract_body(msg)
+
+            # URLs: HTML solo <a href>, texto con regex
+            urls: list[str] = []
+            urls.extend(_extract_urls_from_html(html))
+            urls.extend(_extract_urls_from_text(text))
+
+            # Canonicaliza y filtra SOLO empleos, deduplicando por Job ID
+            job_links: list[str] = []
+            for u in urls:
+                canon = _canonical_linkedin_job_url(u)
+                if canon:
+                    job_links.append(canon)
+
+            links = _dedupe_keep_order(job_links)
+
+            results.append({
+                "message_id": message_id,
+                "subject": subject,
+                "date": date_iso,
+                "links": links,
+            })
+        
+        offers = []
+        for mail in results:
+            for link in mail['links']:
+                new_offer = Offer(link, mail['date'], mail['subject'])
+                offers.append(new_offer)
+        return offers
+
+    finally:
+        try:
+            mail.close()
+        except Exception:
+            pass
+        try:
+            mail.logout()
+        except Exception:
+            pass
+
+
+
+import os
+import requests
+from dotenv import load_dotenv
+from html import unescape
+
+
+# ======================================================
+# UTILIDADES
+# ======================================================
+
+def extract_job_id(job_url: str) -> str:
+    """
+    Extrae el job_id desde una URL tipo:
+    https://www.linkedin.com/jobs/view/4327226302/
+    """
+    job_url = job_url.rstrip("/")
+    return job_url.split("/")[-1]
+
+
+def clean_text(text: str) -> str:
+    """
+    Limpia entidades HTML y espacios innecesarios.
+    """
+    if not text:
+        return ""
+    text = unescape(text)
+    text = text.replace("\r", "\n")
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    return text.strip()
+
+
+# ======================================================
+# FUNCIÓN PRINCIPAL (VOYAGER API)
+# ======================================================
+
+def get_offer_description(job_url: str, timeout: int = 20) -> str:
+    """
+    Obtiene el contenido de 'Acerca del empleo' usando la API interna
+    Voyager de LinkedIn.
+
+    REQUISITOS (.env SIN ESPACIOS):
+      LINKEDIN_LI_AT=...
+      LINKEDIN_JSESSIONID="ajax:..."
+
+    Esta es la ÚNICA forma fiable actualmente.
+    """
+
+    load_dotenv()
+
+    li_at = os.getenv("LINKEDIN_LI_AT")
+    jsessionid = os.getenv("LINKEDIN_JSESSIONID")
+
+    if not li_at or not jsessionid:
+        raise RuntimeError(
+            "❌ Cookies faltantes.\n"
+            "Tu .env debe contener (SIN espacios):\n"
+            "LINKEDIN_LI_AT=...\n"
+            'LINKEDIN_JSESSIONID="ajax:..."'
+        )
+
+    # Limpieza defensiva
+    li_at = li_at.strip().strip('"').strip("'")
+    jsessionid_raw = jsessionid.strip()
+
+    # JSESSIONID debe ir con comillas como cookie
+    if not (jsessionid_raw.startswith('"') and jsessionid_raw.endswith('"')):
+        jsessionid_cookie = f'"{jsessionid_raw.strip("\'\'").strip("\'")}"'
+    else:
+        jsessionid_cookie = jsessionid_raw
+
+    csrf_token = jsessionid_cookie.strip('"')
+
+    job_id = extract_job_id(job_url)
+
+    voyager_url = f"https://www.linkedin.com/voyager/api/jobs/jobPostings/{job_id}"
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+        "x-restli-protocol-version": "2.0.0",
+        "csrf-token": csrf_token,
+        "Referer": job_url,
+    }
+
+    cookies = {
+        "li_at": li_at,
+        "JSESSIONID": jsessionid_cookie,
+    }
+
+    response = requests.get(
+        voyager_url,
+        headers=headers,
+        cookies=cookies,
+        timeout=timeout,
+    )
+
+    # ======================================================
+    # ERRORES REALES DE LINKEDIN
+    # ======================================================
+
+    if response.status_code == 999:
+        raise RuntimeError("❌ LinkedIn bloqueó la request (999). Reduce velocidad.")
+
+    if response.status_code == 403:
+        raise RuntimeError("❌ 403 Forbidden. Cookies inválidas o CSRF incorrecto.")
+
+    if response.status_code != 200:
+        raise RuntimeError(f"❌ HTTP {response.status_code} desde Voyager API.")
+
+    data = response.json()
+
+    description = (
+        data
+        .get("description", {})
+        .get("text")
+    )
+
+    if not description or len(description) < 100:
+        raise RuntimeError(
+            "❌ No se encontró una descripción válida en el payload Voyager."
+        )
+
+    return clean_text(description)
+
+
+
+from pathlib import Path
+from typing import List
+import pandas as pd
+from utils.MACROS import OFFER_COLUMNS
+from utils.Offer import Offer
+
+
+def load_offers_from_excel(
+    excel_path: str | Path,
+    sheet_name: str | int = 0,
+) -> List[Offer]:
+    """
+    Lee un Excel cuyas columnas corresponden a TODOS los campos de Offer:
+    id, link, reception_date, father_mail_subject, affinity, description
+
+    Retorna List[Offer].
+    """
+    excel_path = Path(excel_path)
+    if not excel_path.exists():
+        raise FileNotFoundError(f"No existe el archivo: {excel_path}")
+
+    df = pd.read_excel(excel_path, sheet_name=sheet_name)
+
+    # Validación: deben existir todas las columnas del modelo
+    missing = [c for c in OFFER_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Faltan columnas en el Excel: {missing}. "
+            f"Columnas encontradas: {list(df.columns)}"
+        )
+
+    offers: List[Offer] = []
+
+    for _, row in df.iterrows():
+        # Constructor requiere estas 3
+        link = row["link"]
+        rdate = row["reception_date"]
+        subject = row["father_mail_subject"]
+
+        # si faltan datos básicos, ignora la fila
+        if pd.isna(link) or pd.isna(rdate) or pd.isna(subject):
+            print("Ignorando fila al leer el sheets")
+            continue
+
+        o = Offer(str(link).strip(), rdate, str(subject))
+
+        # affinity (columna obligatoria, puede venir vacía)
+        raw_aff = row["affinity"]
+        o.affinity = None if raw_aff is None or pd.isna(raw_aff) else raw_aff
+
+        # description (columna obligatoria, puede venir vacía)
+        raw_desc = row["description"]
+        o.description = None if raw_desc is None or pd.isna(raw_desc) else str(raw_desc)
+
+        offers.append(o)
+
+    return offers
+
+
+
+BASE_PROMPT = """
+Eres un evaluador automático de ofertas laborales.
+Tu tarea es asignar **una calificación numérica del 1 al 10** que represente el **grado de afinidad** entre **(A) el perfil del candidato** y **(B) cada oferta**.
+
+### Perfil objetivo del candidato (prioridades)
+
+* Rol objetivo: **Machine Learning Engineer / Deep Learning Engineer / Data Scientist**
+* Seniority: **Junior o Pasante**
+* Modalidad: **Remoto**
+* Jornada: **Medio tiempo (part-time)**
+* Experiencia laboral: **sin experiencia profesional en ML (solo proyectos/estudios); experiencia previa como pasante frontend**
+* Stack deseado: **Python, PyTorch/TensorFlow/Keras, scikit-learn**, y tareas de **CV/NLP/ML clásico**.
+
+### Reglas para calificar (1 a 10)
+
+Evalúa cada oferta comparando requisitos, responsabilidades, seniority y modalidad con el perfil.
+
+**Suma afinidad si la oferta:**
+
+* Es explícitamente ML/DL/Data Science (modelado, entrenamiento, pipelines, evaluación, despliegue ML, MLOps básico).
+* Acepta **junior / intern / trainee / entry-level** o “no experience required”.
+* Es **remota**.
+* Es **part-time** (o flexible con pocas horas).
+* Usa o valora **Python + PyTorch/TensorFlow/scikit-learn**, y temas como CV/NLP, clasificación, detección, etc.
+
+**Resta afinidad si la oferta:**
+
+* Pide **+2 años** de experiencia real en ML (más si pide +3/+5).
+* Es onsite/híbrida obligatoria.
+* Es full-time obligatorio (sin flexibilidad).
+* Está enfocada principalmente en **backend/frontend**, DevOps genérico o BI sin ML real.
+* Requiere herramientas muy fuera del perfil sin alternativa (p. ej. solo Java/.NET para ML, o rol puramente de Data Engineer senior).
+
+### Escala sugerida (úsala estrictamente)
+
+* **10**: ML/DL/Data Science + junior/pasante + remoto + part-time (o muy flexible) + stack muy alineado.
+* **8–9**: Muy alineada pero falla 1 cosa menor (ej. full-time pero resto perfecto, o remoto con part-time no claro).
+* **6–7**: Parcialmente alineada (ej. remoto pero pide 1–2 años, o DS general sin stack claro).
+* **4–5**: Poca alineación (ej. full-time onsite, o rol mixto con ML secundario).
+* **1–3**: No es ML/DS o exige seniority alto / presencial obligatorio / totalmente fuera del perfil.
+
+### Formato de entrada de ofertas
+
+Recibirás hasta 10 ofertas. Cada oferta viene como:
+OFFER_ID: id
+DESCRIPTION: <texto de la oferta>
+
+### Tu salida (MUY IMPORTANTE)
+
+Responde **SOLO** con una única línea, sin saltos de línea, sin texto adicional, sin explicaciones, sin espacios extra, en este formato exacto:
+
+id_calificacion;id_calificacion;id_calificacion;...
+
+* Donde **calificacion** es un entero del **1** al **10**.
+* Mantén el **mismo orden** de las ofertas recibidas.
+* Si una oferta no tiene suficiente info, estima con lo disponible (no inventes detalles), y asigna una calificación conservadora.
+
+### Ofertas a evaluar
+
+"""
+
+OFFER_BATCH_SIZE = 10
+
+OFFER_COLUMNS = [
+    "id",
+    "link",
+    "reception_date",
+    "father_mail_subject",
+    "affinity",
+    "description",
+]
+
+REQUIRED_COLUMNS = ["link", "reception_date", "father_mail_subject"]
+
+CLEANED_OFFERS_PATH = "./data/cleaned_offers.xlsx"
+
+from utils.Offer import Offer
+
+def offer_filter_handler(offers: list[Offer]) -> list[Offer]:
+    """
+    Retorna una nueva lista con solo las ofertas que tienen description.
+    
+    :param offers: Lista de objetos Offer
+    :return: Lista filtrada de objetos Offer con description no nula
+    """
+    print("Eliminando ofertas sin description")
+    new_offer_list = [offer for offer in offers if offer.description is not None]
+    print(f"Se eliminaron {len(offers)-len(new_offer_list)} ofertas")
+    return new_offer_list
+from utils.MACROS import OFFER_BATCH_SIZE
+from utils.gemini_query import gemini_query
+from utils.generate_prompt import generate_prompt
+
+
+def _get_offer_batch_affinity(offers):
+    """
+        Hara la consulta a gemini enviando batches de ofertas para aprovechar mejor
+        los limites impuestos por gemini
+
+        Gemini respondera con el siguiente formato :
+            id-calificacion;di-calificacion...
+
+        Retorna la respuesta de gemini
+    """
+    prompt = generate_prompt(offers)
+    gemini_response = gemini_query(prompt)
+    return gemini_response
+
+def _set_offer_batch_affinity_by_gemini_response(gemini_response, offers_list):
+    """
+        Recibe respuesta de gemini con el siguiente formato:
+            id-calificacion;di-calificacion...
+
+        Y ajusta la afinidad de cada oferta correspondiente.
+
+    """
+    i = 0
+    for calification_pairs in gemini_response.split(';'):
+        id_, calification = calification_pairs.split('_')
+        for o in offers_list:
+            if str(o.id) == id_:
+                print(f"Asignando afinidad de oferta : {o.id}")
+                i +=1
+                o.affinity = int(calification)
+
+
+
+
+def offer_list_affinity_handler(offers_list, batch_size=OFFER_BATCH_SIZE):
+    """
+        Se encarga de tomar toda la lista de ofertas y ajustar su afinidad
+        por batches cuyo tamanio esta determinado por OFFER_BATCH_SIZE
+    """
+    i = 0
+    offer_batch = None
+    non_set_affinity_offer_list = [o for o in offers_list if not o.affinity]
+    while i != -1:
+        if (len(non_set_affinity_offer_list)-i) < batch_size:
+            offer_batch = non_set_affinity_offer_list[i:]
+            i = -1
+        else:
+            offer_batch = non_set_affinity_offer_list[i:i+batch_size]
+            i+=batch_size
+        print(f"Enviando {len(offer_batch)} ofertas a gemini para encontrar su afinidad")
+        gemini_response = _get_offer_batch_affinity(offer_batch)
+        _set_offer_batch_affinity_by_gemini_response(gemini_response, offer_batch)
+
+from __future__ import annotations
+
+from utils.get_offer_description import get_offer_description
+
+class Offer:
+    def __init__(self, link, reception_date, father_mail_subject) -> None:
+        self.id = link.split("/")[-2] # se obtiene el id a partir del link obtenido del correo
+        self.link = link
+        self.reception_date = reception_date
+        self.father_mail_subject = father_mail_subject
+        self.affinity = None
+        self.description = None
+
+    def __str__(self) -> str:
+        return f"""
+            __________________________________________
+            |   Offer Data:
+            |---------------
+            |   Offer id        : {self.id}
+            |   Link            : {self.link}
+            |   Mail Subject    : {self.father_mail_subject}
+            |   Reception_date  : {self.reception_date}
+            |   Affinity        : {self.affinity}
+            |   Description     : {self.description[:5]+'...' if self.description else self.description}
+            __________________________________________
+        """
+    def set_description(self):
+        self.description = get_offer_description(self.link)
+
+
+
+def remove_duplicated_offers(offer_list):
+    cleaned_total_offers = []
+    for offer in offer_list:
+        if offer.id not in [o.id for o in cleaned_total_offers]:
+            cleaned_total_offers.append(offer)
+    return cleaned_total_offers
+
+
+from utils.MACROS import CLEANED_OFFERS_PATH
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+import pandas as pd
+from utils.MACROS import OFFER_COLUMNS
+from utils.Offer import Offer
+
+
+
+def _norm_link(link: Any) -> str:
+    return str(link).strip().lower()
+
+
+def _offer_to_row(o: Offer) -> Dict[str, Any]:
+    return {
+        "id": str(o.id) if o.id else None,
+        "link": o.link,
+        "reception_date": str(o.reception_date),
+        "father_mail_subject": o.father_mail_subject,
+        "affinity": o.affinity,
+        "description": o.description,
+    }
+
+
+def write_offers_to_excel(
+    offers: List[Offer],
+    excel_path: str | Path,
+    sheet_name: str = "offers",
+) -> None:
+    """
+    Escribe (sobrescribe) un Excel con TODAS las columnas del modelo Offer:
+    id, link, reception_date, father_mail_subject, affinity, description
+    """
+    excel_path = Path(excel_path)
+
+    df = pd.DataFrame([_offer_to_row(o) for o in offers], columns=OFFER_COLUMNS)
+
+    # Sobrescribe el archivo completo (simple y seguro)
+    with pd.ExcelWriter(excel_path, engine="openpyxl", mode="w") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+

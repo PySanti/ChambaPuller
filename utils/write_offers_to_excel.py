@@ -18,7 +18,7 @@ def _offer_to_row(o: Offer) -> Dict[str, Any]:
         "reception_date": str(o.reception_date),
         "father_mail_subject": o.father_mail_subject,
         "affinity": o.affinity,
-        "description": o.description[:20],
+        "description": o.description,
     }
 
 
