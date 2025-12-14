@@ -42,14 +42,14 @@ Evalúa cada oferta comparando requisitos, responsabilidades, seniority y modali
 ### Formato de entrada de ofertas
 
 Recibirás hasta 10 ofertas. Cada oferta viene como:
-OFFER_ID: <uuid>
+OFFER_ID: id
 DESCRIPTION: <texto de la oferta>
 
 ### Tu salida (MUY IMPORTANTE)
 
 Responde **SOLO** con una única línea, sin saltos de línea, sin texto adicional, sin explicaciones, sin espacios extra, en este formato exacto:
 
-uuid_calificacion;uuid_calificacion;uuid_calificacion;...
+id_calificacion;id_calificacion;id_calificacion;...
 
 * Donde **calificacion** es un entero del **1** al **10**.
 * Mantén el **mismo orden** de las ofertas recibidas.

@@ -9,7 +9,7 @@ def _get_offer_batch_affinity(offers):
         los limites impuestos por gemini
 
         Gemini respondera con el siguiente formato :
-            uuid-calificacion;uudi-calificacion...
+            id-calificacion;di-calificacion...
 
         Retorna la respuesta de gemini
     """
@@ -20,16 +20,16 @@ def _get_offer_batch_affinity(offers):
 def _set_offer_batch_affinity_by_gemini_response(gemini_response, offers_list):
     """
         Recibe respuesta de gemini con el siguiente formato:
-            uuid-calificacion;uudi-calificacion...
+            id-calificacion;di-calificacion...
 
         Y ajusta la afinidad de cada oferta correspondiente.
 
     """
     i = 0
     for calification_pairs in gemini_response.split(';'):
-        uuid, calification = calification_pairs.split('_')
+        id_, calification = calification_pairs.split('_')
         for o in offers_list:
-            if str(o.id) == uuid:
+            if str(o.id) == id_:
                 print(f"Asignando afinidad de oferta : {o.id}")
                 i +=1
                 o.affinity = int(calification)
@@ -44,12 +44,13 @@ def offer_list_affinity_handler(offers_list, batch_size=OFFER_BATCH_SIZE):
     """
     i = 0
     offer_batch = None
+    non_set_affinity_offer_list = [o for o in offers_list if not o.affinity]
     while i != -1:
-        if (len(offers_list)-i) < batch_size:
-            offer_batch = offers_list[i:]
+        if (len(non_set_affinity_offer_list)-i) < batch_size:
+            offer_batch = non_set_affinity_offer_list[i:]
             i = -1
         else:
-            offer_batch = offers_list[i:i+batch_size]
+            offer_batch = non_set_affinity_offer_list[i:i+batch_size]
             i+=batch_size
         print(f"Enviando {len(offer_batch)} ofertas a gemini para encontrar su afinidad")
         gemini_response = _get_offer_batch_affinity(offer_batch)
