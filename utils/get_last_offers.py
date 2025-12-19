@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import os
@@ -16,7 +15,6 @@ from bs4 import BeautifulSoup
 
 from utils.Offer import Offer
 from utils.OfferTypeEnum import OfferTypeEnum
-
 
 # evita bloqueos infinitos
 socket.setdefaulttimeout(35)
@@ -105,6 +103,18 @@ def _extract_body(msg) -> tuple[str, str]:
 
 _URL_RE = re.compile(r"""https?://[^\s"'<>]+""", re.IGNORECASE)
 
+# textos típicos de CTA (botón) en correos
+_CTA_TEXT_RE = re.compile(
+    r"(revisa|ver|detalle|postula|postular|aplica|solicitar|selecci[oó]n|oferta|vacante)",
+    re.IGNORECASE,
+)
+
+# paths típicos que NO son ofertas (evitar basura)
+_CT_BAD_PATH_RE = re.compile(
+    r"(unsubscribe|unsub|baja|cancel|privacidad|privacy|terminos|terms|ayuda|help|faq|soporte|support)",
+    re.IGNORECASE,
+)
+
 
 def _extract_urls_from_text(text: str) -> list[str]:
     urls = _URL_RE.findall(text or "")
@@ -117,13 +127,34 @@ def _extract_urls_from_text(text: str) -> list[str]:
     return out
 
 
-def _extract_urls_from_html(html: str) -> list[str]:
+def _extract_links_from_html_with_text(html: str) -> list[tuple[str, str]]:
+    """
+    Retorna [(href, anchor_text)] de <a>.
+    Importante: aquí podemos priorizar CTA en el parsing.
+    """
     if not html:
         return []
     soup = BeautifulSoup(html, "html.parser")
-    urls: list[str] = []
+
+    pairs: list[tuple[str, str]] = []
     for a in soup.find_all("a", href=True):
         href = (a.get("href") or "").strip()
+        if not href:
+            continue
+
+        # algunos emails pueden tener href relativo: lo dejamos pasar para intentar arreglarlo luego
+        anchor_text = " ".join(a.get_text(" ", strip=True).split())
+        pairs.append((href, anchor_text))
+
+    return pairs
+
+
+def _extract_urls_from_html(html: str) -> list[str]:
+    """Compat: retorna solo hrefs absolutas."""
+    pairs = _extract_links_from_html_with_text(html)
+    urls: list[str] = []
+    for href, _txt in pairs:
+        href = href.strip()
         if href.startswith("http://") or href.startswith("https://"):
             urls.append(href)
 
@@ -139,11 +170,24 @@ def _unwrap_tracking(url: str) -> str:
     try:
         parsed = urlparse(url)
         qs = parse_qs(parsed.query)
+
+        # tracking por query param
         for key in ("url", "redirect", "u", "target", "dest", "destination"):
             if key in qs and qs[key]:
                 candidate = unquote(qs[key][0])
                 if candidate.startswith("http://") or candidate.startswith("https://"):
                     return candidate
+
+        # a veces viene en el fragment (#)
+        if parsed.fragment:
+            frag = parsed.fragment
+            # ejemplo: #url=https%3A%2F%2F...
+            m = re.search(r"(?:^|&|#)url=([^&]+)", frag, flags=re.IGNORECASE)
+            if m:
+                candidate = unquote(m.group(1))
+                if candidate.startswith("http://") or candidate.startswith("https://"):
+                    return candidate
+
     except Exception:
         pass
     return url
@@ -183,7 +227,16 @@ def _canonical_linkedin_job_url(url: str) -> str | None:
         return None
 
 
-def _canonical_computrabajo_job_url(url: str) -> str | None:
+def _canonical_computrabajo_url(url: str, is_cta: bool = False) -> str | None:
+    """
+    Computrabajo: hay correos con link directo de oferta (oferta-de-trabajo),
+    y otros donde el CTA es "Revisa la selección" y lleva a una página de selección/campaña.
+
+    Regla:
+    - Si es link computrabajo, lo aceptamos si NO es "basura" (unsubscribe/privacy/etc.)
+    - Si además coincide patrón "oferta", perfecto.
+    - Si NO coincide patrón oferta, solo lo aceptamos si viene del CTA (is_cta=True).
+    """
     try:
         u = _unwrap_tracking(url)
         p = urlparse(u)
@@ -192,23 +245,37 @@ def _canonical_computrabajo_job_url(url: str) -> str | None:
         if "computrabajo" not in host:
             return None
 
-        path = p.path or ""
-        if "/ofertas-de-trabajo/" not in path:
-            return None
-        if "oferta-de-trabajo" not in path:
+        path = (p.path or "").lower()
+
+        # filtrar basura
+        if _CT_BAD_PATH_RE.search(path):
             return None
 
-        return urlunparse((p.scheme or "https", p.netloc, p.path, "", "", ""))
+        # patrón fuerte (oferta directa)
+        is_offer_like = (
+            ("/ofertas-de-trabajo/" in path and "oferta-de-trabajo" in path)
+            or ("/oferta" in path)
+            or ("oferta-de-trabajo" in path)
+        )
+
+        # si no parece oferta directa, solo aceptar si viene del CTA
+        if not is_offer_like and not is_cta:
+            return None
+
+        # canonical: quitar query/fragment (utm, tracking, etc.)
+        canon = urlunparse((p.scheme or "https", p.netloc, p.path, "", "", ""))
+        return canon
+
     except Exception:
         return None
 
 
-def _canonical_job_url(url: str) -> tuple[str | None, OfferTypeEnum | None]:
+def _canonical_job_url(url: str, is_cta: bool = False) -> tuple[str | None, OfferTypeEnum | None]:
     canon = _canonical_linkedin_job_url(url)
     if canon:
         return canon, OfferTypeEnum.LINKEDIN
 
-    canon = _canonical_computrabajo_job_url(url)
+    canon = _canonical_computrabajo_url(url, is_cta=is_cta)
     if canon:
         return canon, OfferTypeEnum.COMPUTRABAJO
 
@@ -285,6 +352,10 @@ def get_last_offers(
     """
     Retorna ofertas de los últimos `limit` correos POR CADA remitente en `sources`.
     Luego mezcla, dedupe por ID de mensaje y parsea sin ordenar por Date (para evitar cuelgues).
+
+    Mejora clave:
+    - Prioriza links CTA en HTML (p.ej. "Revisa la selección") para Computrabajo.
+    - Computrabajo acepta links de selección solo si vienen del CTA.
     """
 
     load_dotenv()
@@ -348,17 +419,43 @@ def get_last_offers(
 
             text, html = _extract_body(msg)
 
-            urls: list[str] = []
-            urls.extend(_extract_urls_from_html(html))
-            urls.extend(_extract_urls_from_text(text))
+            # --- 1) Extraer links HTML con texto (para priorizar CTA) ---
+            html_pairs = _extract_links_from_html_with_text(html)
+
+            # CTA primero
+            cta_links: list[str] = []
+            other_links: list[str] = []
+            for href, anchor_text in html_pairs:
+                href = href.strip()
+                if not (href.startswith("http://") or href.startswith("https://")):
+                    # si viniera relativo, aquí podrías resolverlo si tuvieras base; por ahora lo ignoramos
+                    continue
+
+                if _CTA_TEXT_RE.search(anchor_text or ""):
+                    cta_links.append(href)
+                else:
+                    other_links.append(href)
+
+            cta_links = _dedupe_keep_order(cta_links)
+            other_links = _dedupe_keep_order(other_links)
+
+            # --- 2) URLs en texto plano ---
+            text_links = _extract_urls_from_text(text)
+
+            # --- 3) Orden de búsqueda:
+            # CTA (HTML) -> otras (HTML) -> texto
+            candidate_urls: list[tuple[str, bool]] = []
+            candidate_urls.extend([(u, True) for u in cta_links])
+            candidate_urls.extend([(u, False) for u in other_links])
+            candidate_urls.extend([(u, False) for u in text_links])
 
             found: list[tuple[str, OfferTypeEnum]] = []
-            for u in urls:
-                canon, typ = _canonical_job_url(u)
+            for u, is_cta in candidate_urls:
+                canon, typ = _canonical_job_url(u, is_cta=is_cta)
                 if canon and typ:
                     found.append((canon, typ))
 
-            # dedupe links manteniendo el primero
+            # dedupe final por link
             seen_links = set()
             deduped: list[tuple[str, OfferTypeEnum]] = []
             for link, typ in found:

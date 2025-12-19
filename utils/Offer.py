@@ -18,6 +18,7 @@ class Offer:
             |   Offer Data:
             |---------------
             |   Offer id        : {self.id}
+            |   Type            : {self.type}
             |   Link            : {self.link}
             |   Mail Subject    : {self.father_mail_subject}
             |   Reception_date  : {self.reception_date}
