@@ -1,15 +1,16 @@
 from __future__ import annotations
-
 from utils.get_offer_description import get_offer_description
+import hashlib
 
 class Offer:
-    def __init__(self, link, reception_date, father_mail_subject) -> None:
-        self.id = link.split("/")[-2] # se obtiene el id a partir del link obtenido del correo
+    def __init__(self, link, reception_date, father_mail_subject, type_) -> None:
+        self.id = hashlib.sha1(link.encode("utf-8")).hexdigest()[:12]  # id corto estable
         self.link = link
         self.reception_date = reception_date
         self.father_mail_subject = father_mail_subject
         self.affinity = None
         self.description = None
+        self.type = type_
 
     def __str__(self) -> str:
         return f"""

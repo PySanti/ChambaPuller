@@ -20,10 +20,12 @@ if __name__ == "__main__":
     print(f"Se cargaron {len(old_offers)} ofertas viejas")
 
     # Se cargan todas las ofertas de los ultimos N correos relacionados con ofertas de trabajo
-    N = 300
+    N = 10
     print(f"Cargando ofertas de los ultimos {N} correos")
     offers_list : List[Offer] = get_last_offers(limit=N) 
     print(f"Ofertas nuevas detectadas : {len(offers_list)}")
+    for o in offers_list:
+        print(o)
 
     print("Fusionando ofertas")
     total_offers = old_offers + offers_list

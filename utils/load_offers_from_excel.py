@@ -3,6 +3,7 @@ from typing import List
 import pandas as pd
 from utils.MACROS import OFFER_COLUMNS
 from utils.Offer import Offer
+from utils.OfferTypeEnum import OfferTypeEnum
 
 
 def load_offers_from_excel(
@@ -42,7 +43,7 @@ def load_offers_from_excel(
             print("Ignorando fila al leer el sheets")
             continue
 
-        o = Offer(str(link).strip(), rdate, str(subject))
+        o = Offer(str(link).strip(), rdate, str(subject), type_=OfferTypeEnum.LINKEDIN if "linkedin" in link else OfferTypeEnum.COMPUTRABAJO)
 
         # affinity (columna obligatoria, puede venir vacía)
         raw_aff = row["affinity"]
