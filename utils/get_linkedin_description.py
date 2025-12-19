@@ -34,7 +34,7 @@ def clean_text(text: str) -> str:
 # FUNCIÓN PRINCIPAL (VOYAGER API)
 # ======================================================
 
-def get_offer_description(job_url: str, timeout: int = 20) -> str:
+def get_linkedin_description(job_url: str, timeout: int = 20) -> str:
     """
     Obtiene el contenido de 'Acerca del empleo' usando la API interna
     Voyager de LinkedIn.

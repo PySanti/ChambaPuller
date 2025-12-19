@@ -1,6 +1,7 @@
 from __future__ import annotations
-from utils.get_offer_description import get_offer_description
+from utils.get_linkedin_description import get_linkedin_description
 import hashlib
+from utils.OfferTypeEnum import OfferTypeEnum
 
 class Offer:
     def __init__(self, link, reception_date, father_mail_subject, type_) -> None:
@@ -27,7 +28,10 @@ class Offer:
             __________________________________________
         """
     def set_description(self):
-        self.description = get_offer_description(self.link)
+        if self.type == OfferTypeEnum.LINKEDIN:
+            self.description = get_linkedin_description(self.link)
+        elif self.type == OfferTypeEnum.COMPUTRABAJO:
+            pass
 
 
 
