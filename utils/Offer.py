@@ -1,4 +1,5 @@
 from __future__ import annotations
+from utils.get_computrabajo_description import get_computrabajo_description
 from utils.get_linkedin_description import get_linkedin_description
 import hashlib
 from utils.OfferTypeEnum import OfferTypeEnum
@@ -31,7 +32,7 @@ class Offer:
         if self.type == OfferTypeEnum.LINKEDIN:
             self.description = get_linkedin_description(self.link)
         elif self.type == OfferTypeEnum.COMPUTRABAJO:
-            pass
+            self.description = get_computrabajo_description(self.link)
 
 
 
