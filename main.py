@@ -48,6 +48,8 @@ if __name__ == "__main__":
     # Se eliminan las ofertas cuya descripcion no pudo ser encontrada
     cleaned_total_offers = offer_filter_handler(cleaned_total_offers)
 
+    write_offers_to_excel(cleaned_total_offers, CLEANED_OFFERS_PATH)
+
     # Luego de cargar todas las descripciones de todas las ofertas, enviamos prompts a gemini en batches de 10 en 10
 
     print("Empezando a generar afinidad para cada oferta")
