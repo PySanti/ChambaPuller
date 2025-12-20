@@ -34,6 +34,9 @@ def _set_offer_batch_affinity_by_gemini_response(gemini_response, offers_list):
                 success(f"Afinidad asignada a oferta : {o.id}")
                 i +=1
                 o.affinity = int(calification)
+    for o in offers_list:
+        if not o.affinity:
+            error(f"La oferta {o.id} perteneciente a {o.father_mail_subject} no tiene afinidad !!")
 
 
 
@@ -54,14 +57,16 @@ def offer_list_affinity_handler(offers_list, batch_size=OFFER_BATCH_SIZE):
             else:
                 offer_batch = non_set_affinity_offer_list[i:i+batch_size]
                 i+=batch_size
-            print(f"Enviando {len(offer_batch)} ofertas a gemini para encontrar su afinidad")
-            try:
-                gemini_response = _get_offer_batch_affinity(offer_batch)
-                print(f"Respuesta de gemini: {gemini_response}")
-                _set_offer_batch_affinity_by_gemini_response(gemini_response, offer_batch)
-            except Exception as e:
-                error("Error en el consumo de gemini, saliendo del bucle")
-                error(str(e))
+            if len(offer_batch) > 0:
+                print(f"Enviando {len(offer_batch)} ofertas a gemini para encontrar su afinidad")
+                try:
+                    gemini_response = _get_offer_batch_affinity(offer_batch)
+                    _set_offer_batch_affinity_by_gemini_response(gemini_response, offer_batch)
+                except Exception as e:
+                    error("Error en el consumo de gemini, saliendo del bucle")
+                    error(str(e))
+                    break
+            else:
                 break
     else:
         print("Todas las ofertas dispuestas cuentan ya con afinidad !")

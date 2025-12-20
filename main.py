@@ -38,6 +38,7 @@ if __name__ == "__main__":
     for offer in cleaned_total_offers:
         if not offer.description:
             try:
+                print(f"Ajustando la descripcion de la oferta : {offer.link[:50]}")
                 # Se accede a linkedin, se extrae la description de la oferta y se setea
                 offer.set_description()
                 success(f"Se ajusto la descripcion de la oferta : {offer.link[:50]}")
