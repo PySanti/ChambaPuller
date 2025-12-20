@@ -140,7 +140,7 @@ Experimentos: Fashion-MNIST (MLP PyTorch), MNIST (MLP TensorFlow).
 """
 
 
-OFFER_BATCH_SIZE = 20
+OFFER_BATCH_SIZE = 30
 
 OFFER_COLUMNS = [
     "id",
