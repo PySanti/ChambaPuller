@@ -206,7 +206,7 @@ def _extract_description_from_job_html(html: str) -> str:
 
     return best
 
-def slice_description(desc):
+def slice_description(desc, job_url):
     """
     Recorta la descripcion a solo el contenido importante
 
@@ -219,7 +219,7 @@ def slice_description(desc):
     if idx != -1:
         desc = desc[idx:]
     else:
-        raise RuntimeError("No se logro encontrar **Descripción de la oferta** dentro de la descripcion de {job_url[:20]}")
+        raise RuntimeError(f"No se logro encontrar **Descripción de la oferta** dentro de la descripcion de {job_url[:20]}")
 
 
     idx = desc.find("Aptitudes asociadas a esta oferta")
@@ -274,4 +274,4 @@ def get_computrabajo_description(job_url: str, timeout: int = 20) -> str:
     if not desc or len(desc) < 120:
         raise RuntimeError("❌ No se pudo extraer una descripción válida desde Computrabajo.")
 
-    return slice_description(desc)
+    return slice_description(desc, job_url)
