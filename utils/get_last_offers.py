@@ -5,6 +5,7 @@ import re
 import ssl
 import socket
 import imaplib
+from utils.logging import success,error
 import email
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
@@ -319,9 +320,9 @@ def _safe_fetch(mail: imaplib.IMAP4_SSL, msg_id: bytes, what: str, retries: int 
             return mail.fetch(msg_id, what)
         except _IMAP_ABORTS as e:
             if attempt >= retries:
-                print(f"[WARN] fetch failed msg_id={msg_id!r} what={what} err={e}")
+                error(f"[WARN] fetch failed msg_id={msg_id!r} what={what} err={e}")
                 return "NO", []
-            print(f"[WARN] fetch error, retrying... msg_id={msg_id!r} err={e}")
+            error(f"[WARN] fetch error, retrying... msg_id={msg_id!r} err={e}")
     return "NO", []
 
 
@@ -406,7 +407,7 @@ def get_last_offers(
             try:
                 msg = email.message_from_bytes(raw)
             except Exception as e:
-                print(f"[WARN] cannot parse msg_id={msg_id!r}: {e}")
+                error(f"[WARN] cannot parse msg_id={msg_id!r}: {e}")
                 continue
 
             subject = _decode_mime_header(msg.get("Subject", ""))
@@ -473,7 +474,7 @@ def get_last_offers(
                     )
                 )
 
-            print(f"OK: {subject} | offers={len(deduped)}")
+            success(f"Oferta detectada: {subject} | offers={len(deduped)}")
 
         return offers
 

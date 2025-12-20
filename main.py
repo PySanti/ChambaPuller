@@ -10,6 +10,8 @@ from utils.remove_duplicated_offers import remove_duplicated_offers
 from utils.write_offers_to_excel import write_offers_to_excel
 from utils.offer_list_affinity_handler import offer_list_affinity_handler
 
+from utils.logging import success,error
+
 
 # PIPELINE PRINCIPAL
 
@@ -17,19 +19,19 @@ if __name__ == "__main__":
     # Se cargan las ofertas contenidas en el excel
     print("Cargando ofertas antiguas")
     old_offers = load_offers_from_excel(CLEANED_OFFERS_PATH)
-    print(f"Se cargaron {len(old_offers)} ofertas viejas")
+    success(f"Se cargaron {len(old_offers)} ofertas viejas")
 
     # Se cargan todas las ofertas de los ultimos N correos relacionados con ofertas de trabajo
     N = 10
     print(f"Cargando ofertas de los ultimos {N} correos")
     offers_list : List[Offer] = get_last_offers(limit=N) 
-    print(f"Ofertas nuevas detectadas : {len(offers_list)}")
+    success(f"Ofertas nuevas detectadas : {len(offers_list)}")
 
     print("Fusionando ofertas")
     total_offers = old_offers + offers_list
     print("Limpiando duplicados entre ofertas viejas y nuevas")
     cleaned_total_offers = remove_duplicated_offers(total_offers)
-    print(f"Se encontraron {len(total_offers)-len(cleaned_total_offers)} duplicados")
+    success(f"Se encontraron {len(total_offers)-len(cleaned_total_offers)} duplicados")
 
 
     # Se recorren todas las ofertas y para cada una
@@ -38,10 +40,10 @@ if __name__ == "__main__":
             try:
                 # Se accede a linkedin, se extrae la description de la oferta y se setea
                 offer.set_description()
-                print(f"Se ajusto la descripcion de la oferta : {offer.link[:50]}")
+                success(f"Se ajusto la descripcion de la oferta : {offer.link[:50]}")
             except Exception as e:
-                print(f"ERROR ajustando oferta {offer.link[:50]} perteneciente a **{offer.father_mail_subject[:30]}** ")
-                print(e)
+                error(f"ERROR ajustando oferta {offer.link[:50]} perteneciente a **{offer.father_mail_subject[:30]}** ")
+                error(str(e))
             sleep(5)
         else:
             print(f"Saltando oferta {offer.link[:50]} por que ya cuenta con descripcion")

@@ -1,6 +1,7 @@
 from utils.MACROS import OFFER_BATCH_SIZE
 from utils.gemini_query import gemini_query
 from utils.generate_prompt import generate_prompt
+from utils.logging import success, error
 
 
 def _get_offer_batch_affinity(offers):
@@ -30,7 +31,7 @@ def _set_offer_batch_affinity_by_gemini_response(gemini_response, offers_list):
         id_, calification = calification_pairs.split('_')
         for o in offers_list:
             if str(o.id) == id_:
-                print(f"Asignando afinidad de oferta : {o.id}")
+                success(f"Afinidad asignada a oferta : {o.id}")
                 i +=1
                 o.affinity = int(calification)
 
@@ -59,8 +60,8 @@ def offer_list_affinity_handler(offers_list, batch_size=OFFER_BATCH_SIZE):
                 print(f"Respuesta de gemini: {gemini_response}")
                 _set_offer_batch_affinity_by_gemini_response(gemini_response, offer_batch)
             except Exception as e:
-                print("Error en el consumo de gemini, saliendo del bucle")
-                print(e)
+                error("Error en el consumo de gemini, saliendo del bucle")
+                error(str(e))
                 break
     else:
         print("Todas las ofertas dispuestas cuentan ya con afinidad !")
