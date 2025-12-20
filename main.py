@@ -38,12 +38,13 @@ if __name__ == "__main__":
             try:
                 # Se accede a linkedin, se extrae la description de la oferta y se setea
                 offer.set_description()
-                print(f"Se ajusto la descripcion de la oferta : {offer.link}")
-            except:
-                print(f"ERROR al tratar de ajustar la descripcion de : {offer.link}")
+                print(f"Se ajusto la descripcion de la oferta : {offer.link[:50]}")
+            except Exception as e:
+                print(f"ERROR ajustando oferta {offer.link[:50]} perteneciente a **{offer.father_mail_subject[:30]}** ")
+                print(e)
             sleep(5)
         else:
-            print(f"Saltando oferta {offer.link} por que ya cuenta con descripcion")
+            print(f"Saltando oferta {offer.link[:50]} por que ya cuenta con descripcion")
 
     # Se eliminan las ofertas cuya descripcion no pudo ser encontrada
     cleaned_total_offers = offer_filter_handler(cleaned_total_offers)

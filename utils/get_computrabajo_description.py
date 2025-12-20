@@ -1,18 +1,14 @@
-
 # utils/get_computrabajo_description.py
 from __future__ import annotations
 
 import re
-import requests
+import json
 from html import unescape
 from urllib.parse import urlparse, parse_qs, unquote
 
+import requests
 from bs4 import BeautifulSoup
 
-
-# ======================================================
-# UTILIDADES
-# ======================================================
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -20,16 +16,19 @@ _UA = (
 )
 
 
+# ======================================================
+# UTILIDADES
+# ======================================================
+
 def clean_text(text: str) -> str:
     """Limpia entidades HTML y espacios innecesarios."""
     if not text:
         return ""
     text = unescape(text)
     text = text.replace("\r", "\n")
-    # colapsar líneas vacías excesivas
-    while "\n\n\n" in text:
-        text = text.replace("\n\n\n", "\n\n")
-    # colapsar espacios
+    # colapsa demasiadas líneas en blanco
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # limpia espacios
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n[ \t]+", "\n", text)
     return text.strip()
@@ -37,11 +36,11 @@ def clean_text(text: str) -> str:
 
 def _unwrap_tracking(url: str) -> str:
     """
-    Desenvuelve wrappers de tracking típicos:
-    - ...?url=<encoded>
-    - ...?redirect=<encoded>
-    - ...?u=<encoded>
-    - ...?target=<encoded>
+    Desenvuelve wrappers típicos:
+      ...?url=<ENCODED>
+      ...?redirect=<ENCODED>
+      ...?u=<ENCODED>
+      ...?target=<ENCODED>
     """
     try:
         p = urlparse(url)
@@ -56,7 +55,23 @@ def _unwrap_tracking(url: str) -> str:
     return url
 
 
-def _safe_get(url: str, timeout: int = 20) -> requests.Response:
+def _is_computrabajo_job_url(url: str) -> bool:
+    """
+    Computrabajo (VE) suele usar:
+      https://ve.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-...
+    """
+    try:
+        p = urlparse(url)
+        host = (p.netloc or "").lower()
+        if "computrabajo" not in host:
+            return False
+        path = p.path or ""
+        return ("/ofertas-de-trabajo/" in path) and ("oferta-de-trabajo" in path)
+    except Exception:
+        return False
+
+
+def _safe_get(url: str, timeout: int) -> requests.Response:
     return requests.get(
         url,
         timeout=timeout,
@@ -71,38 +86,85 @@ def _safe_get(url: str, timeout: int = 20) -> requests.Response:
     )
 
 
-def _extract_description_from_html(html: str) -> str:
+def _resolve_to_job_url(url: str, timeout: int = 20) -> str:
     """
-    Intenta extraer la descripción de una oferta Computrabajo desde HTML.
-    Es robusto a cambios menores de layout.
+    - Si llega una URL de tracking (go.computrabajo.com) o wrapper con ?url=,
+      intenta llegar a la URL real de la oferta.
+    - Si termina en un listado, intenta sacar el primer link de oferta del HTML.
+    """
+    url = _unwrap_tracking(url)
+
+    if _is_computrabajo_job_url(url):
+        return url
+
+    host = (urlparse(url).netloc or "").lower()
+
+    # Tracking de Computrabajo
+    if "go.computrabajo.com" in host:
+        resp = _safe_get(url, timeout=timeout)
+        final_url = str(resp.url)
+
+        if _is_computrabajo_job_url(final_url):
+            return final_url
+
+        # Si cayó en listado, buscar primer link de oferta
+        soup = BeautifulSoup(resp.text or "", "html.parser")
+        a = soup.select_one('a[href*="oferta-de-trabajo"]')
+        if a:
+            href = (a.get("href") or "").strip()
+            if href.startswith("/"):
+                # usa el host final si existe; si no, el VE por defecto
+                final_host = (urlparse(final_url).netloc or "ve.computrabajo.com")
+                return f"https://{final_host}{href}"
+            if href.startswith("http"):
+                return href
+
+        # si no encontró nada, se queda con el final_url
+        return final_url
+
+    # Último intento: seguir redirects generales
+    try:
+        resp = _safe_get(url, timeout=timeout)
+        if _is_computrabajo_job_url(str(resp.url)):
+            return str(resp.url)
+        return str(resp.url)
+    except Exception:
+        return url
+
+
+def _extract_description_from_job_html(html: str) -> str:
+    """
+    Extrae descripción de la página de oferta.
+    Estrategias:
+      1) JSON-LD JobPosting (description)
+      2) Selectores frecuentes de contenedores
+      3) Heurística por sección "Descripción"
     """
     soup = BeautifulSoup(html or "", "html.parser")
 
-    # 1) JSON-LD (si existe)
-    # Muchas páginas publican schema.org JobPosting con "description".
-    for script in soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}):
+    # 1) JSON-LD (schema.org JobPosting)
+    for s in soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}):
         try:
-            content = (script.string or script.get_text() or "").strip()
-            if not content:
+            raw = (s.string or s.get_text() or "").strip()
+            if not raw:
                 continue
-            # puede ser objeto o lista; evitamos json import si no hace falta:
-            import json  # local import
-            data = json.loads(content)
-
-            candidates = data if isinstance(data, list) else [data]
-            for obj in candidates:
-                if isinstance(obj, dict) and obj.get("@type") in ("JobPosting", ["JobPosting"]):
-                    desc = obj.get("description")
-                    if isinstance(desc, str) and len(desc.strip()) > 80:
-                        # description suele venir con HTML
-                        desc_text = BeautifulSoup(desc, "html.parser").get_text("\n")
-                        return clean_text(desc_text)
+            data = json.loads(raw)
+            objs = data if isinstance(data, list) else [data]
+            for obj in objs:
+                if not isinstance(obj, dict):
+                    continue
+                if obj.get("@type") == "JobPosting" and isinstance(obj.get("description"), str):
+                    # puede traer HTML dentro
+                    desc_html = obj["description"]
+                    desc_text = BeautifulSoup(desc_html, "html.parser").get_text("\n")
+                    desc_text = clean_text(desc_text)
+                    if len(desc_text) >= 120:
+                        return desc_text
         except Exception:
             pass
 
-    # 2) Selectores comunes (pueden variar por país/plantilla)
+    # 2) Selectores comunes (cambian por país/plantilla; ponemos varios)
     selectors = [
-        # típicos contenedores de descripción
         "#jobDescriptionText",
         ".box_detail .box_detail_text",
         ".box_detail .text",
@@ -111,7 +173,6 @@ def _extract_description_from_html(html: str) -> str:
         ".detalle",
         "section#detail",
         "div#detail",
-        # fallback: bloques con "Descripción" cerca
         "article",
         "main",
     ]
@@ -125,16 +186,13 @@ def _extract_description_from_html(html: str) -> str:
         if len(txt) > len(best):
             best = txt
 
-    # 3) Heurística: buscar el bloque alrededor de encabezados "Descripción"
+    # 3) Heurística: recortar desde “Descripción”
     if not best or len(best) < 120:
-        text = soup.get_text("\n")
-        text = clean_text(text)
-
-        # intenta recortar desde "Descripción" hacia abajo
-        m = re.search(r"\bDescripci[oó]n\b[:\s]*\n(.+)", text, flags=re.IGNORECASE | re.DOTALL)
+        whole = clean_text(soup.get_text("\n"))
+        m = re.search(r"\bDescripci[oó]n\b[:\s]*\n(.+)", whole, flags=re.IGNORECASE | re.DOTALL)
         if m:
             candidate = clean_text(m.group(1))
-            # cortar si llega a secciones típicas
+            # corta en headings típicos
             candidate = re.split(
                 r"\n(?:Requisitos|Beneficios|Salario|Acerca de la empresa|"
                 r"Sobre la empresa|Detalles|Postular|Inscribirse)\b",
@@ -148,58 +206,35 @@ def _extract_description_from_html(html: str) -> str:
 
     return best
 
-
-def _is_job_url(url: str) -> bool:
-    try:
-        p = urlparse(url)
-        host = (p.netloc or "").lower()
-        if "computrabajo" not in host:
-            return False
-        path = p.path or ""
-        return ("/ofertas-de-trabajo/" in path) and ("oferta-de-trabajo" in path)
-    except Exception:
-        return False
-
-
-def _resolve_to_job_url(url: str, timeout: int = 20) -> str:
+def slice_description(desc):
     """
-    Si te llega un go.computrabajo.com/go/... o un wrapper con ?url=...,
-    intenta resolverlo hasta un link real de oferta.
+    Recorta la descripcion a solo el contenido importante
+
+    Desde "Descripción de oferta" hasta "Postularme"
+
+    Si se encuentran varias palabras claves delimitadoras ("Descripcion ..." y/o "Postu ...")
+    solo se quedaran con la primera.
     """
-    url = _unwrap_tracking(url)
+    idx = desc.find("Descripción de la oferta")
+    if idx != -1:
+        desc = desc[idx:]
+    else:
+        raise RuntimeError("No se logro encontrar **Descripción de la oferta** dentro de la descripcion de {job_url[:20]}")
 
-    # Si ya es oferta, listo
-    if _is_job_url(url):
-        return url
 
-    # Si es go.computrabajo.com, seguir redirects y luego buscar el primer link de oferta
-    if "go.computrabajo.com" in (urlparse(url).netloc or "").lower():
-        resp = _safe_get(url, timeout=timeout)
-        final_url = str(resp.url)
+    idx = desc.find("Aptitudes asociadas a esta oferta")
+    if idx != -1:
+        desc = desc[:idx]
+    else:
+        idx = desc.find("Postularme")
+        if idx != -1:
+            desc = desc[:idx]
+        else:
+            raise RuntimeError("No se logro encontrar **Postularme** dentro de la descripcion de {job_url[:20]}")
 
-        if _is_job_url(final_url):
-            return final_url
+    return desc
 
-        # si cayó en un listado, intentar sacar el primer link de oferta del HTML
-        soup = BeautifulSoup(resp.text or "", "html.parser")
-        a = soup.select_one('a[href*="oferta-de-trabajo"]')
-        if a:
-            href = (a.get("href") or "").strip()
-            if href.startswith("/"):
-                final_host = urlparse(final_url).netloc or "ve.computrabajo.com"
-                return f"https://{final_host}{href}"
-            if href.startswith("http"):
-                return href
 
-    # último intento: seguir redirects generales
-    try:
-        resp = _safe_get(url, timeout=timeout)
-        if _is_job_url(str(resp.url)):
-            return str(resp.url)
-    except Exception:
-        pass
-
-    return url  # puede quedar como listado; el caller decide si es válido
 
 
 # ======================================================
@@ -208,18 +243,18 @@ def _resolve_to_job_url(url: str, timeout: int = 20) -> str:
 
 def get_computrabajo_description(job_url: str, timeout: int = 20) -> str:
     """
-    Obtiene la descripción de una oferta de Computrabajo a partir de su link.
+    Devuelve la descripción de una oferta de Computrabajo a partir del link.
 
     Acepta:
-      - URL directa de oferta:
-        https://ve.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-...-HASH
-      - URL de tracking (go.computrabajo.com) o wrapper con ?url=...
+      - URL directa de oferta (recomendada)
+      - URL de tracking go.computrabajo.com
+      - URL wrapper con ?url=...
 
-    Lanza RuntimeError si no logra extraer una descripción razonable.
+    Lanza RuntimeError si no obtiene una descripción válida.
     """
     resolved = _resolve_to_job_url(job_url, timeout=timeout)
 
-    if not _is_job_url(resolved):
+    if not _is_computrabajo_job_url(resolved):
         raise RuntimeError(
             "❌ La URL no parece ser una oferta directa de Computrabajo "
             f"(resuelta a: {resolved})."
@@ -234,12 +269,9 @@ def get_computrabajo_description(job_url: str, timeout: int = 20) -> str:
     if resp.status_code != 200:
         raise RuntimeError(f"❌ HTTP {resp.status_code} al acceder a Computrabajo.")
 
-    desc = _extract_description_from_html(resp.text or "")
+    desc = _extract_description_from_job_html(resp.text or "")
 
-    # Validación mínima
     if not desc or len(desc) < 120:
-        raise RuntimeError(
-            "❌ No se pudo extraer una descripción válida desde la página de Computrabajo."
-        )
+        raise RuntimeError("❌ No se pudo extraer una descripción válida desde Computrabajo.")
 
-    return desc
+    return slice_description(desc)
